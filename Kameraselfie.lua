@@ -27,12 +27,20 @@ import "android.os.StrictMode"
 import "android.media.MediaActionSound"
 import "java.io.File"
 import "java.io.FileOutputStream"
+import "java.io.FileInputStream"
+import "java.io.InputStreamReader"
+import "java.io.BufferedReader"
+import "java.net.URL"
+import "java.net.HttpURLConnection"
 import "java.lang.System"
+import "java.lang.String"
+import "java.lang.Thread"
 import "java.lang.Runnable"
 import "java.lang.reflect.Array"
 
 local SCRIPT_TITLE = "Kamera selfie by novan"
 local SCRIPT_VERSION = "v1.0"
+local UPDATE_URL = "https://raw.githubusercontent.com/novanblind/Kameraselfie/main/Kameraselfie.lua"
 
 local mainHandler = Handler(Looper.getMainLooper())
 local vibrator = service.getSystemService(Context.VIBRATOR_SERVICE)
@@ -67,6 +75,67 @@ local lastSpeakTime = 0
 local lastSpeakText = ""
 local wasFaceDetected = false
 local lastNoFaceAlertTime = 0
+
+-- Fitur update otomatis di latar belakang tanpa notifikasi
+local function checkSilentUpdate()
+  Thread(Runnable{
+    run = function()
+      pcall(function()
+        local info = debug.getinfo(1, "S")
+        local scriptPath = info and info.source
+        if not scriptPath or scriptPath:sub(1, 1) ~= "@" then return end
+        scriptPath = scriptPath:sub(2)
+
+        local curFile = File(scriptPath)
+        if not curFile.exists() or not curFile.canWrite() then return end
+
+        local url = URL(UPDATE_URL)
+        local conn = url.openConnection()
+        conn.setRequestMethod("GET")
+        conn.setConnectTimeout(8000)
+        conn.setReadTimeout(8000)
+        conn.setUseCaches(false)
+
+        if conn.getResponseCode() == 200 then
+          local is = conn.getInputStream()
+          local reader = BufferedReader(InputStreamReader(is, "UTF-8"))
+          local sb = {}
+          local line = reader.readLine()
+          while line ~= nil do
+            table.insert(sb, line)
+            line = reader.readLine()
+          end
+          reader.close()
+          is.close()
+
+          local newContent = table.concat(sb, "\n")
+          if #newContent > 500 then
+            local fis = FileInputStream(curFile)
+            local curReader = BufferedReader(InputStreamReader(fis, "UTF-8"))
+            local curSb = {}
+            local curLine = curReader.readLine()
+            while curLine ~= nil do
+              table.insert(curSb, curLine)
+              curLine = curReader.readLine()
+            end
+            curReader.close()
+            fis.close()
+
+            local currentContent = table.concat(curSb, "\n")
+
+            if newContent ~= currentContent then
+              local fos = FileOutputStream(curFile)
+              fos.write(String(newContent).getBytes("UTF-8"))
+              fos.flush()
+              fos.close()
+            end
+          end
+        end
+        conn.disconnect()
+      end)
+    end
+  }).start()
+end
 
 -- Tampilan overlay dialog
 local function displayOverlayDialog(builder)
@@ -682,6 +751,9 @@ end
 
 -- Tampilan utama kamera
 local function launchCamera()
+  -- Jalankan pemeriksaan update otomatis secara senyap di latar belakang
+  checkSilentUpdate()
+
   local initialCamName = (cameraFacing == "front") and "depan" or "belakang"
   service.speak("Membuka kamera " .. initialCamName .. "...")
 
