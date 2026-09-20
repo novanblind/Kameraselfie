@@ -1,6 +1,6 @@
 -- Judul: Kamera selfie by novan
--- Versi: v3.0
--- Fungsi: Kamera selfie dan perekam video otomatis dengan panduan suara untuk tunanetra, pemilih kamera di layar utama, tombol berhenti rekam, dan pembaruan otomatis.
+-- Versi: v4.0
+-- Fungsi: Kamera selfie dan perekam video otomatis dengan panduan suara untuk tunanetra, pemilih kamera di layar utama, tombol berhenti rekam dengan fokus otomatis, dan pembaruan online.
 
 require "import"
 import "android.hardware.Camera"
@@ -45,8 +45,17 @@ import "java.lang.Runnable"
 import "java.lang.reflect.Array"
 
 local SCRIPT_TITLE = "Kamera selfie by novan"
-local SCRIPT_VERSION = "v3.0"
+local SCRIPT_VERSION = "v4.0"
 local UPDATE_URL = "https://raw.githubusercontent.com/novanblind/Kameraselfie/main/Kameraselfie.lua"
+
+-- Ambil lokasi berkas skrip di thread utama sebelum menjalankan thread background
+local CURRENT_SCRIPT_PATH = nil
+pcall(function()
+  local info = debug.getinfo(1, "S")
+  if info and info.source and info.source:sub(1, 1) == "@" then
+    CURRENT_SCRIPT_PATH = info.source:sub(2)
+  end
+end)
 
 local mainHandler = Handler(Looper.getMainLooper())
 local vibrator = service.getSystemService(Context.VIBRATOR_SERVICE)
@@ -93,7 +102,7 @@ local isRecordingVideo = false
 local mediaRecorder = nil
 local perfectStartTime = nil
 
-local currentMode = "photo" -- "photo" atau "video"
+local currentMode = "photo"
 
 local lastSpeakTime = 0
 local lastSpeakText = ""
@@ -106,12 +115,10 @@ local lastSensorUpdate = 0
 local lastShakeTriggerTime = 0
 local isSensorRegistered = false
 
--- Deklarasi awal fungsi
 local stopVideoRecording
 local startVideoRecording
 local showCameraSelectionDialog
 
--- Tampilan overlay dialog agar muncul di atas semua antarmuka
 local function displayOverlayDialog(builder)
   local dlg = builder.create()
   local win = dlg.getWindow()
@@ -138,7 +145,7 @@ local function playShutterSound()
   end)
 end
 
--- Listener sensor akselerometer untuk mendeteksi goyangan HP saat merekam
+-- Listener sensor akselerometer untuk stop rekam via goyangan
 local sensorListener = SensorEventListener{
   onSensorChanged = function(event)
     if not isRecordingVideo then return end
@@ -191,7 +198,7 @@ local function unregisterShakeListener()
   end
 end
 
--- Fitur periksa versi baru dengan dialog utama
+-- Fitur periksa versi baru yang stabil dengan header User-Agent
 local function checkUpdateWithDialog(isManual)
   if isManual then
     service.speak("Sedang memeriksa versi baru...")
@@ -206,22 +213,18 @@ local function checkUpdateWithDialog(isManual)
       local newContent = ""
 
       pcall(function()
-        local info = debug.getinfo(1, "S")
-        local scriptPath = info and info.source
-        if not scriptPath or scriptPath:sub(1, 1) ~= "@" then return end
-        scriptPath = scriptPath:sub(2)
-
-        local curFile = File(scriptPath)
-        if not curFile.exists() or not curFile.canWrite() then return end
-
         local url = URL(UPDATE_URL)
         local conn = url.openConnection()
         conn.setRequestMethod("GET")
-        conn.setConnectTimeout(8000)
-        conn.setReadTimeout(8000)
+        conn.setConnectTimeout(10000)
+        conn.setReadTimeout(10000)
         conn.setUseCaches(false)
+        conn.setInstanceFollowRedirects(true)
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android)")
+        conn.setRequestProperty("Accept", "*/*")
 
-        if conn.getResponseCode() == 200 then
+        local responseCode = conn.getResponseCode()
+        if responseCode == 200 then
           local is = conn.getInputStream()
           local reader = BufferedReader(InputStreamReader(is, "UTF-8"))
           local sb = {}
@@ -234,13 +237,13 @@ local function checkUpdateWithDialog(isManual)
           is.close()
 
           newContent = table.concat(sb, "\n")
-          if #newContent > 500 then
+          if #newContent > 300 then
             checkSuccess = true
             local rVer = newContent:match('SCRIPT_VERSION%s*=%s*"([^"]+)"') or newContent:match('%-%-%s*Versi:%s*(v[%d%.]+)')
             local rDesc = newContent:match('%-%-%s*Fungsi:%s*([^\r\n]+)')
               or newContent:match('%-%-%s*Fitur:%s*([^\r\n]+)')
               or newContent:match('%-%-%s*Catatan:%s*([^\r\n]+)')
-              or "Peningkatan performa, tombol berhenti rekam video, pemilih kamera di layar utama, dan perbaikan kestabilan."
+              or "Pembaruan performa, tombol berhenti rekam video, dan pemilih kamera utama."
 
             if rVer and rVer ~= SCRIPT_VERSION then
               hasNewVersion = true
@@ -255,7 +258,6 @@ local function checkUpdateWithDialog(isManual)
       mainHandler.post(Runnable{
         run = function()
           if hasNewVersion then
-            -- Dialog jika versi baru tersedia
             local builder = AlertDialog.Builder(service)
               .setTitle("Versi Baru Tersedia")
               .setMessage("Versi baru tersedia: " .. remoteVersion .. "\n\nFungsi:\n" .. remoteDesc .. "\n\nVersi saat ini: " .. SCRIPT_VERSION .. "\n\nApakah Anda ingin memperbarui skrip sekarang?")
@@ -267,14 +269,14 @@ local function checkUpdateWithDialog(isManual)
                   run = function()
                     local writeSuccess = false
                     pcall(function()
-                      local info = debug.getinfo(1, "S")
-                      local sPath = info and info.source:sub(2)
-                      local cFile = File(sPath)
-                      local fos = FileOutputStream(cFile)
-                      fos.write(String(newContent).getBytes("UTF-8"))
-                      fos.flush()
-                      fos.close()
-                      writeSuccess = true
+                      if CURRENT_SCRIPT_PATH then
+                        local cFile = File(CURRENT_SCRIPT_PATH)
+                        local fos = FileOutputStream(cFile)
+                        fos.write(String(newContent).getBytes("UTF-8"))
+                        fos.flush()
+                        fos.close()
+                        writeSuccess = true
+                      end
                     end)
 
                     mainHandler.post(Runnable{
@@ -289,7 +291,7 @@ local function checkUpdateWithDialog(isManual)
                           displayOverlayDialog(doneBuilder)
                           service.speak("Download selesai. Pembaruan berhasil dipasang.")
                         else
-                          service.speak("Gagal menyimpan berkas pembaruan.")
+                          service.speak("Gagal menyimpan pembaruan ke berkas lokal.")
                         end
                       end
                     })
@@ -301,11 +303,10 @@ local function checkUpdateWithDialog(isManual)
               end)
 
             displayOverlayDialog(builder)
-            service.speak("Versi baru tersedia. Versi " .. remoteVersion .. ". Fungsi: " .. remoteDesc)
+            service.speak("Versi baru tersedia: " .. remoteVersion .. ". Fungsi: " .. remoteDesc)
 
           elseif isManual then
             if checkSuccess then
-              -- Dialog jika tidak ada pembaruan
               local noUpdateBuilder = AlertDialog.Builder(service)
                 .setTitle("Periksa Versi")
                 .setMessage("Tidak ada pembaruan.\n\nAnda sudah menggunakan versi terbaru (" .. SCRIPT_VERSION .. ").")
@@ -315,15 +316,14 @@ local function checkUpdateWithDialog(isManual)
               displayOverlayDialog(noUpdateBuilder)
               service.speak("Tidak ada pembaruan. Anda sudah menggunakan versi terbaru.")
             else
-              -- Dialog jika pemeriksaan gagal
               local errorBuilder = AlertDialog.Builder(service)
                 .setTitle("Periksa Versi")
-                .setMessage("Gagal memeriksa versi baru. Pastikan koneksi internet Anda aktif.")
+                .setMessage("Gagal memeriksa versi baru. Pastikan koneksi internet Anda aktif dan dapat mengakses server.")
                 .setPositiveButton("Oke", function(dlg)
                   dlg.dismiss()
                 end)
               displayOverlayDialog(errorBuilder)
-              service.speak("Gagal memeriksa pembaruan. Pastikan ada koneksi internet.")
+              service.speak("Gagal memeriksa versi baru. Pastikan koneksi internet Anda aktif.")
             end
           end
         end
@@ -332,7 +332,6 @@ local function checkUpdateWithDialog(isManual)
   }).start()
 end
 
--- Pengatur ritme ucapan panduan
 local function speakGuidance(text, force)
   if isSettingsOpen or isRecordingVideo or currentMode == "video" then return end
   local now = System.currentTimeMillis()
@@ -391,7 +390,6 @@ local function getSortedPictureSizes(params)
   return list
 end
 
--- Mengambil daftar resolusi video dari terendah ke tertinggi
 local function getSortedVideoSizes(params)
   local list = {}
   if not params then return list end
@@ -436,7 +434,6 @@ local function applyFlashModeToParams(params)
   end
 end
 
--- Pelepasan kamera dan perekam video
 local function releaseCamera()
   if isRecordingVideo then
     stopVideoRecording()
@@ -523,7 +520,6 @@ local function startCameraPreview(holder)
   end)
 end
 
--- Penghentian perekaman video (lewat tombol berhenti atau goyangan HP)
 stopVideoRecording = function()
   if not isRecordingVideo then return end
   isRecordingVideo = false
@@ -554,6 +550,11 @@ stopVideoRecording = function()
         btnRecordVideo.setVisibility(View.VISIBLE)
         btnRecordVideo.setText("Mulai Rekam Video")
         btnRecordVideo.setBackgroundColor(Color.parseColor("#16A34A"))
+        -- Kembalikan fokus pembaca layar ke tombol mulai rekam video
+        btnRecordVideo.requestFocus()
+        btnRecordVideo.sendAccessibilityEvent(8)
+        btnRecordVideo.sendAccessibilityEvent(32768)
+        btnRecordVideo.performAccessibilityAction(64, nil)
       end
       if tvStatus then
         tvStatus.setText("Video berhasil disimpan")
@@ -563,7 +564,6 @@ stopVideoRecording = function()
   })
 end
 
--- Memulai perekaman video (bawaan 720p)
 startVideoRecording = function()
   if isRecordingVideo or not cam or isCapturing or isSettingsOpen then return end
 
@@ -589,7 +589,6 @@ startVideoRecording = function()
       mediaRecorder.setOrientationHint(90)
     end
 
-    -- Mengatur resolusi rekaman video (default 720p: 1280x720)
     if selectedVideoWidth > 0 and selectedVideoHeight > 0 then
       pcall(function()
         mediaRecorder.setVideoSize(selectedVideoWidth, selectedVideoHeight)
@@ -623,7 +622,22 @@ startVideoRecording = function()
     if tvStatus then
       tvStatus.setText("Sedang merekam video... Tekan tombol Berhenti atau goyangkan HP")
     end
-    service.speak("Mulai merekam video. Tekan tombol berhenti atau goyangkan HP untuk berhenti merekam.")
+
+    -- Pindahkan kursor pembaca layar langsung ke tombol Berhenti Rekam Video
+    mainHandler.postDelayed(Runnable{
+      run = function()
+        pcall(function()
+          if btnStopRecord and isRecordingVideo then
+            btnStopRecord.requestFocus()
+            btnStopRecord.sendAccessibilityEvent(8)     -- TYPE_VIEW_FOCUSED
+            btnStopRecord.sendAccessibilityEvent(32768) -- TYPE_VIEW_ACCESSIBILITY_FOCUSED
+            btnStopRecord.performAccessibilityAction(64, nil) -- ACTION_ACCESSIBILITY_FOCUS
+          end
+        end)
+      end
+    }, 200)
+
+    service.speak("Mulai merekam video.")
   else
     pcall(function()
       if mediaRecorder then
@@ -634,11 +648,10 @@ startVideoRecording = function()
         cam.lock()
       end
     end)
-    service.speak("Gagal memulai perekaman video. Pastikan izin mikrofon dan resolusi video telah sesuai.")
+    service.speak("Gagal memulai perekaman video. Pastikan izin mikrofon telah diizinkan.")
   end
 end
 
--- Proses jepret dan simpan foto
 local function takeSelfiePhoto()
   if not cam or isCapturing or isSettingsOpen or currentMode ~= "photo" then return end
   isCapturing = true
@@ -702,7 +715,6 @@ local function takeSelfiePhoto()
   end)
 end
 
--- Logika deteksi posisi wajah
 processFaces = function(faces)
   if isCapturing or isSettingsOpen or currentMode ~= "photo" or not faces then return end
 
@@ -807,7 +819,6 @@ processFaces = function(faces)
   end
 end
 
--- Dialog pemilihan kamera
 showCameraSelectionDialog = function()
   local options = {
     "Kamera Depan (Selfie)",
@@ -840,7 +851,6 @@ showCameraSelectionDialog = function()
   displayOverlayDialog(builder)
 end
 
--- Dialog resolusi foto
 local function showResolutionDialog()
   if not cam then
     service.speak("Kamera belum siap.")
@@ -891,7 +901,6 @@ local function showResolutionDialog()
   displayOverlayDialog(builder)
 end
 
--- Dialog resolusi video (bawaan 720p)
 local function showVideoResolutionDialog()
   if not cam then
     service.speak("Kamera belum siap.")
@@ -938,7 +947,6 @@ local function showVideoResolutionDialog()
   displayOverlayDialog(builder)
 end
 
--- Dialog sensitivitas goyangan HP
 local function showShakeSensitivityDialog()
   local options = {
     "Tinggi (Goyangan Ringan)",
@@ -1173,10 +1181,9 @@ local function showSettingsMenu()
   })
 end
 
--- Pengalih mode foto dan video
 local function toggleCameraMode()
   if isRecordingVideo then
-    service.speak("Hentikan rekaman terlebih dahulu dengan menekan tombol berhenti atau menggoyangkan HP.")
+    service.speak("Hentikan rekaman terlebih dahulu.")
     return
   end
 
@@ -1205,9 +1212,7 @@ local function toggleCameraMode()
   end
 end
 
--- Tampilan utama kamera
 local function launchCamera()
-  -- Memeriksa pembaruan skrip otomatis saat dibuka
   checkUpdateWithDialog(false)
 
   local initialCamName = (cameraFacing == "front") and "depan" or "belakang"
@@ -1236,7 +1241,7 @@ local function launchCamera()
   frame.setFitsSystemWindows(true)
   frame.addView(surfaceView)
 
-  -- Bar Status Atas
+  -- Status Atas
   tvStatus = TextView(service)
   tvStatus.setText("Kamera aktif (Mode Foto)")
   tvStatus.setContentDescription("Kamera aktif (Mode Foto)")
@@ -1255,13 +1260,15 @@ local function launchCamera()
   tvStatus.setLayoutParams(tvParams)
   frame.addView(tvStatus)
 
-  -- Tombol Mulai Rekam Video (Hanya tampil di Mode Video saat tidak merekam)
+  -- Tombol Mulai Rekam Video
   btnRecordVideo = Button(service)
   btnRecordVideo.setText("Mulai Rekam Video")
+  btnRecordVideo.setContentDescription("Mulai Rekam Video, tombol")
   btnRecordVideo.setTextSize(17)
   btnRecordVideo.setTextColor(Color.WHITE)
   btnRecordVideo.setBackgroundColor(Color.parseColor("#16A34A"))
   btnRecordVideo.setPadding(20, 18, 20, 18)
+  btnRecordVideo.setFocusable(true)
   btnRecordVideo.setVisibility(View.GONE)
 
   local recordParams = FrameLayout.LayoutParams(
@@ -1277,13 +1284,15 @@ local function launchCamera()
   end)
   frame.addView(btnRecordVideo)
 
-  -- Tombol Berhenti Rekam Video (Muncul saat proses rekam berlangsung)
+  -- Tombol Berhenti Rekam Video (Fokus otomatis saat merekam)
   btnStopRecord = Button(service)
   btnStopRecord.setText("Berhenti Rekam Video")
+  btnStopRecord.setContentDescription("Berhenti Rekam Video, tombol")
   btnStopRecord.setTextSize(17)
   btnStopRecord.setTextColor(Color.WHITE)
   btnStopRecord.setBackgroundColor(Color.parseColor("#DC2626"))
   btnStopRecord.setPadding(20, 18, 20, 18)
+  btnStopRecord.setFocusable(true)
   btnStopRecord.setVisibility(View.GONE)
 
   local stopParams = FrameLayout.LayoutParams(
@@ -1299,7 +1308,7 @@ local function launchCamera()
   end)
   frame.addView(btnStopRecord)
 
-  -- Bilah Kontrol Bawah
+  -- Bilah Menu Bawah
   local bottomControlBar = LinearLayout(service)
   bottomControlBar.setOrientation(LinearLayout.HORIZONTAL)
   bottomControlBar.setBackgroundColor(Color.parseColor("#CC000000"))
@@ -1312,7 +1321,7 @@ local function launchCamera()
   )
   bottomControlBar.setLayoutParams(barParams)
 
-  -- 1. Tombol Mode Foto / Video
+  -- 1. Mode Foto / Video
   btnMode = Button(service)
   btnMode.setText("Mode: Foto")
   btnMode.setTextSize(13)
@@ -1328,7 +1337,7 @@ local function launchCamera()
     toggleCameraMode()
   end)
 
-  -- 2. Tombol Pemilih Kamera Depan dan Belakang di Layar Utama
+  -- 2. Pemilih Kamera Depan / Belakang
   btnSwitchCam = Button(service)
   local initialCamText = (cameraFacing == "front") and "Kamera: Depan" or "Kamera: Belakang"
   btnSwitchCam.setText(initialCamText)
@@ -1349,7 +1358,7 @@ local function launchCamera()
     showCameraSelectionDialog()
   end)
 
-  -- 3. Tombol Pengaturan
+  -- 3. Pengaturan
   local btnSettings = Button(service)
   btnSettings.setText("Pengaturan")
   btnSettings.setTextSize(13)
@@ -1369,7 +1378,7 @@ local function launchCamera()
     showSettingsMenu()
   end)
 
-  -- 4. Tombol Kembali
+  -- 4. Kembali
   local btnClose = Button(service)
   btnClose.setText("Kembali")
   btnClose.setTextSize(13)
