@@ -1,5 +1,5 @@
 -- Judul: Kamera selfie by novan
--- Versi: v4.2
+-- Versi: v4.3
 -- Fungsi: Kamera selfie dan perekam video otomatis dengan panduan suara untuk tunanetra, pemilih kamera di layar utama, tombol berhenti rekam dengan fokus otomatis, menu tindakan (buka/putar di dalam skrip, bagikan ke aplikasi lain, hapus, ubah nama) setelah mengambil foto atau video, dan pembaruan online.
 
 require "import"
@@ -55,7 +55,7 @@ import "java.lang.Runnable"
 import "java.lang.reflect.Array"
 
 local SCRIPT_TITLE = "Kamera selfie by novan"
-local SCRIPT_VERSION = "v4.2"
+local SCRIPT_VERSION = "v4.3"
 local UPDATE_URL = "https://raw.githubusercontent.com/novanblind/Kameraselfie/main/Kameraselfie.lua"
 
 -- Melonggarkan kebijakan StrictMode secara aman
@@ -1810,12 +1810,6 @@ local function toggleCameraMode()
 end
 
 local function launchCamera()
-  mainHandler.postDelayed(Runnable{
-    run = function()
-      checkUpdateWithDialog(false)
-    end
-  }, 3000)
-
   local initialCamName = (cameraFacing == "front") and "depan" or "belakang"
   service.speak("Membuka kamera " .. initialCamName .. "...")
 
